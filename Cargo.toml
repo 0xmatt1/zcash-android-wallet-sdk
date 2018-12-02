@@ -6,17 +6,30 @@ description = "Simple PoC that rust can work with protobufs over JNI"
 publish = false
 
 [dependencies]
+failure = "0.1"
 rand = "0.4"
 rusqlite = { version = "0.15", features = ["bundled"] }
 log = "0.4"
 
+[dependencies.ff]
+git = "https://github.com/str4d/librustzcash.git"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
+
+[dependencies.pairing]
+git = "https://github.com/str4d/librustzcash.git"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
+
 [dependencies.zcash_client_backend]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "63ec78bb857a258a97d25a5a6e747389996e566a"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
+
+[dependencies.zcash_primitives]
+git = "https://github.com/str4d/librustzcash.git"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
 
 [dependencies.zip32]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "63ec78bb857a258a97d25a5a6e747389996e566a"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
 
 [target.'cfg(target_os="android")'.dependencies]
 jni = { version = "0.10", default-features = false }
