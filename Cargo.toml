@@ -19,6 +19,10 @@ rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
 git = "https://github.com/str4d/librustzcash.git"
 rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
 
+[dependencies.sapling-crypto]
+git = "https://github.com/str4d/librustzcash.git"
+rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
+
 [dependencies.zcash_client_backend]
 git = "https://github.com/str4d/librustzcash.git"
 rev = "77091cd59cd3b6eab59fdd9866a045110ca16351"
