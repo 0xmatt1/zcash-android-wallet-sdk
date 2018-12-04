@@ -4,6 +4,8 @@ class JniConverter {
 
     external fun getAddress(seed: ByteArray): String
 
+    external fun getBalance(dbData: String): Long
+
     external fun scanBlocks(db_cache: String, db_data: String, seed: ByteArray, birthday: Int)
 
     external fun sendToAddress(
