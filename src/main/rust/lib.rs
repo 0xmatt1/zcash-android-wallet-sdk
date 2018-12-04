@@ -82,6 +82,7 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
             diversifier BLOB NOT NULL,
             value INTEGER NOT NULL,
             rcm BLOB NOT NULL,
+            nf BLOB NOT NULL UNIQUE,
             memo BLOB,
             spent INTEGER,
             FOREIGN KEY (tx) REFERENCES transactions(id_tx),
@@ -146,6 +147,8 @@ fn scan_cached_blocks(
     let mut stmt_fetch_tree = data.prepare("SELECT sapling_tree FROM blocks WHERE height = ?")?;
     let mut stmt_fetch_witnesses =
         data.prepare("SELECT note, witness FROM sapling_witnesses WHERE block = ?")?;
+    let mut stmt_fetch_nullifiers =
+        data.prepare("SELECT id_note, nf FROM received_notes WHERE spent IS NULL")?;
     let mut stmt_insert_block = data.prepare(
         "INSERT INTO blocks (height, sapling_tree)
         VALUES (?, ?)",
@@ -156,9 +159,11 @@ fn scan_cached_blocks(
         VALUES (?, ?)",
     )?;
     let mut stmt_select_tx = data.prepare("SELECT id_tx FROM transactions WHERE txid = ?")?;
+    let mut stmt_mark_spent_note =
+        data.prepare("UPDATE received_notes SET spent = ? WHERE nf = ?")?;
     let mut stmt_insert_note = data.prepare(
-        "INSERT INTO received_notes (tx, output_index, account, diversifier, value, rcm)
-        VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO received_notes (tx, output_index, account, diversifier, value, rcm, nf)
+        VALUES (?, ?, ?, ?, ?, ?, ?)",
     )?;
     let mut stmt_insert_witness = data.prepare(
         "INSERT INTO sapling_witnesses (note, block, witness)
@@ -194,6 +199,13 @@ fn scan_cached_blocks(
     })?;
     let mut witnesses: Vec<_> = witnesses.into_iter().collect::<Result<_, _>>()?;
 
+    // Get the nullifiers for the notes we are tracking
+    let nullifiers = stmt_fetch_nullifiers.query_map(NO_PARAMS, |row| {
+        let nf: Vec<_> = row.get(1);
+        nf
+    })?;
+    let mut nullifiers: Vec<_> = nullifiers.into_iter().collect::<Result<_, _>>()?;
+
     for row in rows {
         let row = row?;
 
@@ -213,8 +225,15 @@ fn scan_cached_blocks(
         last_height = row.height;
 
         let txs = {
+            let nf_refs: Vec<_> = nullifiers.iter().map(|nf| &nf[..]).collect();
             let mut witness_refs: Vec<_> = witnesses.iter_mut().map(|w| &mut w.witness).collect();
-            scan_block_from_bytes(&row.data, &extfvks, &mut tree, &mut witness_refs[..])
+            scan_block_from_bytes(
+                &row.data,
+                &extfvks,
+                &nf_refs,
+                &mut tree,
+                &mut witness_refs[..],
+            )
         };
 
         // Insert the block into the database.
@@ -234,6 +253,20 @@ fn scan_cached_blocks(
                 stmt_select_tx.query_row(&[txid], |row| row.get(0))?
             };
 
+            // Mark notes as spent and remove them from the scanning cache
+            for spend in &tx.shielded_spends {
+                stmt_mark_spent_note.execute(&[tx_row.to_sql()?, spend.nf.to_sql()?])?;
+            }
+            nullifiers = nullifiers
+                .into_iter()
+                .filter(|nf| {
+                    tx.shielded_spends
+                        .iter()
+                        .find(|spend| &spend.nf == nf)
+                        .is_none()
+                })
+                .collect();
+
             for (output, witness) in tx
                 .shielded_outputs
                 .into_iter()
@@ -241,6 +274,11 @@ fn scan_cached_blocks(
             {
                 let mut rcm = [0; 32];
                 output.note.r.into_repr().write_le(&mut rcm[..])?;
+                let nf = output.note.nf(
+                    &extfvks[output.account].fvk.vk,
+                    witness.position() as u64,
+                    &JUBJUB,
+                );
 
                 // Insert received note into the database.
                 // Assumptions:
@@ -253,6 +291,7 @@ fn scan_cached_blocks(
                     output.to.diversifier.0.to_sql()?,
                     (output.note.value as i64).to_sql()?,
                     rcm.to_sql()?,
+                    nf.to_sql()?,
                 ])?;
                 let note_row = data.last_insert_rowid();
 
@@ -261,6 +300,9 @@ fn scan_cached_blocks(
                     id_note: note_row,
                     witness,
                 });
+
+                // Cache nullifier for note (to detect subsequent spends in this scan).
+                nullifiers.push(nf);
             }
         }
 
