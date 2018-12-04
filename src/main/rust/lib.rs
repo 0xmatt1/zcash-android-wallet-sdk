@@ -33,6 +33,8 @@ use zcash_primitives::{
 };
 use zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendingKey};
 
+const SAPLING_CONSENSUS_BRANCH_ID: u32 = 0x76b8_09bb;
+
 const ANCHOR_OFFSET: u32 = 10;
 
 fn extfvk_from_seed(seed: &[u8]) -> ExtendedFullViewingKey {
@@ -480,13 +482,20 @@ pub mod android {
     extern crate log_panics;
 
     use log::Level;
+    use std::path::Path;
+    use zcash_client_backend::prover::LocalTxProver;
+    use zcash_primitives::transaction::components::Amount;
+    use zip32::ExtendedSpendingKey;
 
     use self::android_logger::Filter;
     use self::jni::objects::{JClass, JString};
-    use self::jni::sys::{jbyteArray, jint, jstring};
+    use self::jni::sys::{jbyteArray, jint, jlong, jstring};
     use self::jni::JNIEnv;
 
-    use super::{address_from_extfvk, extfvk_from_seed, scan_cached_blocks};
+    use super::{
+        address_from_extfvk, extfvk_from_seed, scan_cached_blocks, send_to_address,
+        SAPLING_CONSENSUS_BRANCH_ID,
+    };
 
     #[no_mangle]
     pub unsafe extern "C" fn Java_cash_z_wallet_sdk_jni_JniConverter_initLogs(
@@ -540,6 +549,60 @@ pub mod android {
             scan_cached_blocks(&db_cache, &db_data, &[extfvk_from_seed(&seed)], birthday)
         {
             error!("Error while scanning blocks: {}", e);
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_cash_z_wallet_sdk_jni_JniConverter_sendToAddress(
+        env: JNIEnv,
+        _: JClass,
+        db_data: JString,
+        seed: jbyteArray,
+        to: JString,
+        value: jlong,
+        spend_params: JString,
+        output_params: JString,
+    ) -> jlong {
+        let db_data: String = env
+            .get_string(db_data)
+            .expect("Couldn't get Java string!")
+            .into();
+        let seed = env.convert_byte_array(seed).unwrap();
+        let to: String = env
+            .get_string(to)
+            .expect("Couldn't get Java string!")
+            .into();
+        let value = Amount(value);
+        let spend_params: String = env
+            .get_string(spend_params)
+            .expect("Couldn't get Java string!")
+            .into();
+        let output_params: String = env
+            .get_string(output_params)
+            .expect("Couldn't get Java string!")
+            .into();
+
+        let prover = LocalTxProver::new(
+            Path::new(&spend_params),
+            "8270785a1a0d0bc77196f000ee6d221c9c9894f55307bd9357c3f0105d31ca63991ab91324160d8f53e2bbd3c2633a6eb8bdf5205d822e7f3f73edac51b2b70c",
+            Path::new(&output_params),
+            "657e3d38dbb5cb5e7dd2970e8b03d69b4787dd907285b5a7f0790dcc8072f60bf593b32cc2d1c030e00ff5ae64bf84c5c3beb84ddc841d48264b4a171744d028",
+        );
+
+        match send_to_address(
+            &db_data,
+            SAPLING_CONSENSUS_BRANCH_ID,
+            &ExtendedSpendingKey::master(&seed),
+            prover,
+            0,
+            &to,
+            value,
+        ) {
+            Ok(tx_row) => tx_row,
+            Err(e) => {
+                error!("Error while sending funds: {}", e);
+                -1
+            }
         }
     }
 }

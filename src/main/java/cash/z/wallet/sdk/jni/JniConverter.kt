@@ -6,6 +6,14 @@ class JniConverter {
 
     external fun scanBlocks(db_cache: String, db_data: String, seed: ByteArray, birthday: Int)
 
+    external fun sendToAddress(
+        dbData: String,
+        seed: ByteArray,
+        to: String,
+        value: Long,
+        spendParams: String,
+        outputParams: String): Long
+
     external fun initLogs()
 
     companion object {
