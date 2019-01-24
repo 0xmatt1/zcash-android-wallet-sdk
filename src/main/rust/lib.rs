@@ -71,6 +71,7 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
             id_tx INTEGER PRIMARY KEY,
             txid BLOB NOT NULL UNIQUE,
             block INTEGER,
+            tx_index INTEGER,
             raw BLOB,
             FOREIGN KEY (block) REFERENCES blocks(height)
         )",
@@ -184,10 +185,13 @@ fn scan_cached_blocks(
         "INSERT INTO blocks (height, sapling_tree)
         VALUES (?, ?)",
     )?;
-    let mut stmt_update_tx = data.prepare("UPDATE transactions SET block = ? WHERE txid = ?")?;
+    let mut stmt_update_tx = data.prepare(
+        "UPDATE transactions
+        SET block = ?, tx_index = ? WHERE txid = ?",
+    )?;
     let mut stmt_insert_tx = data.prepare(
-        "INSERT INTO transactions (txid, block)
-        VALUES (?, ?)",
+        "INSERT INTO transactions (txid, block, tx_index)
+        VALUES (?, ?, ?)",
     )?;
     let mut stmt_select_tx = data.prepare("SELECT id_tx FROM transactions WHERE txid = ?")?;
     let mut stmt_mark_spent_note =
@@ -276,9 +280,18 @@ fn scan_cached_blocks(
         for (tx, new_witnesses) in txs {
             // First try update an existing transaction in the database.
             let txid = tx.txid.0.to_vec();
-            let tx_row = if stmt_update_tx.execute(&[row.height.to_sql()?, txid.to_sql()?])? == 0 {
+            let tx_row = if stmt_update_tx.execute(&[
+                row.height.to_sql()?,
+                (tx.index as i64).to_sql()?,
+                txid.to_sql()?,
+            ])? == 0
+            {
                 // It isn't there, so insert our transaction into the database.
-                stmt_insert_tx.execute(&[txid.to_sql()?, row.height.to_sql()?])?;
+                stmt_insert_tx.execute(&[
+                    txid.to_sql()?,
+                    row.height.to_sql()?,
+                    (tx.index as i64).to_sql()?,
+                ])?;
                 data.last_insert_rowid()
             } else {
                 // It was there, so grab its row number.
