@@ -15,6 +15,7 @@ class JniConverter {
         seed: ByteArray,
         to: String,
         value: Long,
+        memo: String,
         spendParams: String,
         outputParams: String): Long
 

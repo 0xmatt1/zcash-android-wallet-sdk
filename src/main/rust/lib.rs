@@ -22,6 +22,7 @@ use sapling_crypto::{
 use zcash_client_backend::{
     address::{decode_payment_address, encode_payment_address},
     constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST,
+    note_encryption::Memo,
     prover::TxProver,
     transaction::Builder,
     welding_rig::scan_block_from_bytes,
@@ -375,6 +376,7 @@ fn send_to_address(
     account: u32,
     to_str: &str,
     value: Amount,
+    memo: Option<Memo>,
 ) -> Result<i64, Error> {
     // Derive the ExtendedFullViewingKey for the account we are spending from.
     let extsk = ExtendedSpendingKey::from_path(
@@ -487,7 +489,7 @@ fn send_to_address(
             selected.witness,
         )?;
     }
-    builder.add_sapling_output(account, to, value, None)?;
+    builder.add_sapling_output(account, to, value, memo.clone())?;
     let (tx, tx_metadata) = builder.build(consensus_branch_id, master, prover)?;
     // We only called add_sapling_output() once.
     let output_index = tx_metadata.output_index(0).unwrap() as i64;
@@ -503,17 +505,32 @@ fn send_to_address(
     let id_tx = data.last_insert_rowid();
 
     // Save the sent note in the database.
-    let mut stmt_insert_sent_note = data.prepare(
-        "INSERT INTO sent_notes (tx, output_index, from_account, address, value)
-        VALUES (?, ?, ?, ?, ?)",
-    )?;
-    stmt_insert_sent_note.execute(&[
-        id_tx.to_sql()?,
-        output_index.to_sql()?,
-        account.to_sql()?,
-        to_str.to_sql()?,
-        value.0.to_sql()?,
-    ])?;
+    if memo.is_some() {
+        let mut stmt_insert_sent_note = data.prepare(
+            "INSERT INTO sent_notes (tx, output_index, from_account, address, value, memo)
+            VALUES (?, ?, ?, ?, ?, ?)",
+        )?;
+        stmt_insert_sent_note.execute(&[
+            id_tx.to_sql()?,
+            output_index.to_sql()?,
+            account.to_sql()?,
+            to_str.to_sql()?,
+            value.0.to_sql()?,
+            memo.unwrap().as_bytes().to_sql()?,
+        ])?;
+    } else {
+        let mut stmt_insert_sent_note = data.prepare(
+            "INSERT INTO sent_notes (tx, output_index, from_account, address, value)
+            VALUES (?, ?, ?, ?, ?)",
+        )?;
+        stmt_insert_sent_note.execute(&[
+            id_tx.to_sql()?,
+            output_index.to_sql()?,
+            account.to_sql()?,
+            to_str.to_sql()?,
+            value.0.to_sql()?,
+        ])?;
+    }
 
     // Return the row number of the transaction, so the caller can fetch it for sending.
     Ok(id_tx)
@@ -529,7 +546,7 @@ pub mod android {
 
     use log::Level;
     use std::path::Path;
-    use zcash_client_backend::prover::LocalTxProver;
+    use zcash_client_backend::{note_encryption::Memo, prover::LocalTxProver};
     use zcash_primitives::transaction::components::Amount;
     use zip32::ExtendedSpendingKey;
 
@@ -646,6 +663,7 @@ pub mod android {
         seed: jbyteArray,
         to: JString,
         value: jlong,
+        memo: JString,
         spend_params: JString,
         output_params: JString,
     ) -> jlong {
@@ -659,6 +677,10 @@ pub mod android {
             .expect("Couldn't get Java string!")
             .into();
         let value = Amount(value);
+        let memo: String = env
+            .get_string(memo)
+            .expect("Couldn't get Java string!")
+            .into();
         let spend_params: String = env
             .get_string(spend_params)
             .expect("Couldn't get Java string!")
@@ -675,6 +697,14 @@ pub mod android {
             "657e3d38dbb5cb5e7dd2970e8b03d69b4787dd907285b5a7f0790dcc8072f60bf593b32cc2d1c030e00ff5ae64bf84c5c3beb84ddc841d48264b4a171744d028",
         );
 
+        let memo = match Memo::from_str(&memo) {
+            Ok(memo) => Some(memo),
+            Err(()) => {
+                error!("Memo is too long");
+                return -1;
+            }
+        };
+
         match send_to_address(
             &db_data,
             SAPLING_CONSENSUS_BRANCH_ID,
@@ -683,6 +713,7 @@ pub mod android {
             0,
             &to,
             value,
+            memo,
         ) {
             Ok(tx_row) => tx_row,
             Err(e) => {
