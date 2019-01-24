@@ -156,19 +156,19 @@ fn scan_cached_blocks(
     db_cache: &str,
     db_data: &str,
     extfvks: &[ExtendedFullViewingKey],
-    birthday: i32,
 ) -> Result<(), Error> {
     let cache = Connection::open(db_cache)?;
     let data = Connection::open(db_data)?;
 
-    // Recall where we synced up to previously
+    // Recall where we synced up to previously.
+    // If we have never synced, use 0 to select all cached CompactBlocks.
     let mut last_height =
         data.query_row(
             "SELECT MAX(height) FROM blocks",
             NO_PARAMS,
             |row| match row.get_checked(0) {
                 Ok(h) => h,
-                Err(_) => birthday,
+                Err(_) => 0,
             },
         )?;
 
@@ -552,7 +552,7 @@ pub mod android {
 
     use self::android_logger::Filter;
     use self::jni::objects::{JClass, JString};
-    use self::jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
+    use self::jni::sys::{jboolean, jbyteArray, jlong, jstring, JNI_FALSE, JNI_TRUE};
     use self::jni::JNIEnv;
 
     use super::{
@@ -636,7 +636,6 @@ pub mod android {
         db_cache: JString,
         db_data: JString,
         seed: jbyteArray,
-        birthday: jint,
     ) {
         let db_cache: String = env
             .get_string(db_cache)
@@ -648,9 +647,7 @@ pub mod android {
             .into();
         let seed = env.convert_byte_array(seed).unwrap();
 
-        if let Err(e) =
-            scan_cached_blocks(&db_cache, &db_data, &[extfvk_from_seed(&seed)], birthday)
-        {
+        if let Err(e) = scan_cached_blocks(&db_cache, &db_data, &[extfvk_from_seed(&seed)]) {
             error!("Error while scanning blocks: {}", e);
         }
     }
