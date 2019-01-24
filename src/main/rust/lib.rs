@@ -106,6 +106,20 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
         )",
         NO_PARAMS,
     )?;
+    data.execute(
+        "CREATE TABLE IF NOT EXISTS sent_notes (
+            id_note INTEGER PRIMARY KEY,
+            tx INTEGER NOT NULL,
+            output_index INTEGER NOT NULL,
+            from_account INTEGER NOT NULL,
+            address TEXT NOT NULL,
+            value INTEGER NOT NULL,
+            memo BLOB,
+            FOREIGN KEY (tx) REFERENCES transactions(id_tx),
+            CONSTRAINT tx_output UNIQUE (tx, output_index)
+        )",
+        NO_PARAMS,
+    )?;
     Ok(())
 }
 
@@ -359,7 +373,7 @@ fn send_to_address(
     master: &ExtendedSpendingKey,
     prover: impl TxProver,
     account: u32,
-    to: &str,
+    to_str: &str,
     value: Amount,
 ) -> Result<i64, Error> {
     // Derive the ExtendedFullViewingKey for the account we are spending from.
@@ -373,7 +387,7 @@ fn send_to_address(
     );
     let extfvk = ExtendedFullViewingKey::from(&extsk);
 
-    let to = decode_payment_address(HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, to)?;
+    let to = decode_payment_address(HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, to_str)?;
 
     let data = Connection::open(db_data)?;
 
@@ -474,7 +488,9 @@ fn send_to_address(
         )?;
     }
     builder.add_sapling_output(account, to, value, None)?;
-    let tx = builder.build(consensus_branch_id, master, prover)?;
+    let (tx, tx_metadata) = builder.build(consensus_branch_id, master, prover)?;
+    // We only called add_sapling_output() once.
+    let output_index = tx_metadata.output_index(0).unwrap() as i64;
 
     // Save the transaction in the database.
     let mut raw_tx = vec![];
@@ -484,9 +500,23 @@ fn send_to_address(
         VALUES (?, ?)",
     )?;
     stmt_insert_tx.execute(&[&tx.txid().0[..], &raw_tx[..]])?;
+    let id_tx = data.last_insert_rowid();
+
+    // Save the sent note in the database.
+    let mut stmt_insert_sent_note = data.prepare(
+        "INSERT INTO sent_notes (tx, output_index, from_account, address, value)
+        VALUES (?, ?, ?, ?, ?)",
+    )?;
+    stmt_insert_sent_note.execute(&[
+        id_tx.to_sql()?,
+        output_index.to_sql()?,
+        account.to_sql()?,
+        to_str.to_sql()?,
+        value.0.to_sql()?,
+    ])?;
 
     // Return the row number of the transaction, so the caller can fetch it for sending.
-    Ok(data.last_insert_rowid())
+    Ok(id_tx)
 }
 
 /// JNI interface
