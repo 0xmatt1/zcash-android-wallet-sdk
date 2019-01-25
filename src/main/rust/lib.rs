@@ -5,6 +5,7 @@ extern crate log;
 
 extern crate ff;
 extern crate pairing;
+extern crate protobuf;
 extern crate rusqlite;
 extern crate sapling_crypto;
 extern crate zcash_client_backend;
@@ -14,6 +15,7 @@ extern crate zip32;
 use failure::Error;
 use ff::{PrimeField, PrimeFieldRepr};
 use pairing::bls12_381::Bls12;
+use protobuf::parse_from_bytes;
 use rusqlite::{types::ToSql, Connection, NO_PARAMS};
 use sapling_crypto::{
     jubjub::fs::{Fs, FsRepr},
@@ -23,9 +25,10 @@ use zcash_client_backend::{
     address::{decode_payment_address, encode_payment_address},
     constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST,
     note_encryption::Memo,
+    proto::compact_formats::CompactBlock,
     prover::TxProver,
     transaction::Builder,
-    welding_rig::scan_block_from_bytes,
+    welding_rig::scan_block,
 };
 use zcash_primitives::{
     merkle_tree::{CommitmentTree, IncrementalWitness},
@@ -61,8 +64,8 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
     data.execute(
         "CREATE TABLE IF NOT EXISTS blocks (
             height INTEGER PRIMARY KEY,
-            time INTEGER,
-            sapling_tree BLOB
+            time INTEGER NOT NULL,
+            sapling_tree BLOB NOT NULL
         )",
         NO_PARAMS,
     )?;
@@ -182,8 +185,8 @@ fn scan_cached_blocks(
     let mut stmt_fetch_nullifiers =
         data.prepare("SELECT id_note, nf, account FROM received_notes WHERE spent IS NULL")?;
     let mut stmt_insert_block = data.prepare(
-        "INSERT INTO blocks (height, sapling_tree)
-        VALUES (?, ?)",
+        "INSERT INTO blocks (height, time, sapling_tree)
+        VALUES (?, ?, ?)",
     )?;
     let mut stmt_update_tx = data.prepare(
         "UPDATE transactions
@@ -260,22 +263,23 @@ fn scan_cached_blocks(
         }
         last_height = row.height;
 
+        let block: CompactBlock = parse_from_bytes(&row.data)?;
+        let block_time = block.time;
+
         let txs = {
             let nf_refs: Vec<_> = nullifiers.iter().map(|(nf, acc)| (&nf[..], *acc)).collect();
             let mut witness_refs: Vec<_> = witnesses.iter_mut().map(|w| &mut w.witness).collect();
-            scan_block_from_bytes(
-                &row.data,
-                &extfvks,
-                &nf_refs,
-                &mut tree,
-                &mut witness_refs[..],
-            )
+            scan_block(block, &extfvks, &nf_refs, &mut tree, &mut witness_refs[..])
         };
 
         // Insert the block into the database.
         let mut encoded_tree = Vec::new();
         tree.write(&mut encoded_tree).unwrap();
-        stmt_insert_block.execute(&[row.height.to_sql()?, encoded_tree.to_sql()?])?;
+        stmt_insert_block.execute(&[
+            row.height.to_sql()?,
+            block_time.to_sql()?,
+            encoded_tree.to_sql()?,
+        ])?;
 
         for (tx, new_witnesses) in txs {
             // First try update an existing transaction in the database.
