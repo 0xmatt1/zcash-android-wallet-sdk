@@ -12,7 +12,7 @@ extern crate zcash_client_backend;
 extern crate zcash_primitives;
 extern crate zip32;
 
-use failure::Error;
+use failure::{format_err, Error};
 use ff::{PrimeField, PrimeFieldRepr};
 use pairing::bls12_381::Bls12;
 use protobuf::parse_from_bytes;
@@ -251,15 +251,13 @@ fn scan_cached_blocks(
         // Start an SQL transaction for this block.
         data.execute("BEGIN IMMEDIATE", NO_PARAMS)?;
 
-        // Scanned blocks MUST be height-seqential.
+        // Scanned blocks MUST be height-sequential.
         if row.height != (last_height + 1) {
-            error!(
+            return Err(format_err!(
                 "Expected height of next CompactBlock to be {}, but was {}",
                 last_height + 1,
                 row.height
-            );
-            // Nothing more we can do
-            break;
+            ));
         }
         last_height = row.height;
 
