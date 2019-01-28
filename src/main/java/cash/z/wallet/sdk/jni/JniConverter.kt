@@ -8,7 +8,7 @@ class JniConverter {
 
     external fun getBalance(dbData: String): Long
 
-    external fun scanBlocks(db_cache: String, db_data: String, seed: ByteArray)
+    external fun scanBlocks(db_cache: String, db_data: String, seed: ByteArray): Boolean
 
     external fun sendToAddress(
         dbData: String,

@@ -653,7 +653,7 @@ pub mod android {
         db_cache: JString,
         db_data: JString,
         seed: jbyteArray,
-    ) {
+    ) -> jboolean {
         let db_cache: String = env
             .get_string(db_cache)
             .expect("Couldn't get Java string!")
@@ -664,8 +664,12 @@ pub mod android {
             .into();
         let seed = env.convert_byte_array(seed).unwrap();
 
-        if let Err(e) = scan_cached_blocks(&db_cache, &db_data, &[extfvk_from_seed(&seed)]) {
-            error!("Error while scanning blocks: {}", e);
+        match scan_cached_blocks(&db_cache, &db_data, &[extfvk_from_seed(&seed)]) {
+            Ok(()) => JNI_TRUE,
+            Err(e) => {
+                error!("Error while scanning blocks: {}", e);
+                JNI_FALSE
+            }
         }
     }
 
