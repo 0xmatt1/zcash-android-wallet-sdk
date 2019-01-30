@@ -200,6 +200,19 @@ struct WitnessRow {
     witness: IncrementalWitness,
 }
 
+fn get_address(db_data: &str, account: u32) -> Result<String, Error> {
+    let data = Connection::open(db_data)?;
+
+    let addr = data.query_row(
+        "SELECT address FROM accounts
+        WHERE account = ?",
+        &[account],
+        |row| row.get(0),
+    )?;
+
+    Ok(addr)
+}
+
 fn get_balance(db_data: &str, account: u32) -> Result<Amount, Error> {
     let data = Connection::open(db_data)?;
 
@@ -644,7 +657,7 @@ pub mod android {
     use self::jni::JNIEnv;
 
     use super::{
-        address_from_extfvk, extfvk_from_seed, get_balance, init_accounts_table, init_blocks_table,
+        extfvk_from_seed, get_address, get_balance, init_accounts_table, init_blocks_table,
         init_data_database, scan_cached_blocks, send_to_address, SAPLING_CONSENSUS_BRANCH_ID,
     };
 
@@ -750,11 +763,29 @@ pub mod android {
     pub unsafe extern "C" fn Java_cash_z_wallet_sdk_jni_JniConverter_getAddress(
         env: JNIEnv,
         _: JClass,
-        seed: jbyteArray,
+        db_data: JString,
+        account: jint,
     ) -> jstring {
-        let seed = env.convert_byte_array(seed).unwrap();
+        let db_data: String = env
+            .get_string(db_data)
+            .expect("Couldn't get Java string!")
+            .into();
 
-        let addr = address_from_extfvk(&extfvk_from_seed(&seed, 0));
+        let addr = match account {
+            acc if acc >= 0 => match get_address(&db_data, acc as u32) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    error!("Error while fetching balance: {}", e);
+                    // Return an empty string to indicate an error
+                    String::default()
+                }
+            },
+            _ => {
+                error!("account argument must be positive");
+                // Return an empty string to indicate an error
+                String::default()
+            }
+        };
 
         let output = env.new_string(addr).expect("Couldn't create Java string!");
         output.into_inner()
