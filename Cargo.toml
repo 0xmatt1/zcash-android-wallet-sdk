@@ -14,27 +14,27 @@ log = "0.4"
 
 [dependencies.ff]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [dependencies.pairing]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [dependencies.sapling-crypto]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [dependencies.zcash_client_backend]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [dependencies.zcash_primitives]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [dependencies.zip32]
 git = "https://github.com/str4d/librustzcash.git"
-rev = "786ca43d464eed3d9b8ebb8ca794b21041bb4f31"
+rev = "b18759d98ba59b0b3adfa33e661693e378742a57"
 
 [target.'cfg(target_os="android")'.dependencies]
 jni = { version = "0.10", default-features = false }

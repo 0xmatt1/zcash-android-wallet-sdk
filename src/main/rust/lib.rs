@@ -22,8 +22,8 @@ use sapling_crypto::{
     primitives::{Diversifier, Note},
 };
 use zcash_client_backend::{
-    address::{decode_payment_address, encode_payment_address},
-    constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST,
+    constants::HRP_SAPLING_PAYMENT_ADDRESS_TEST,
+    encoding::{decode_payment_address, encode_payment_address},
     note_encryption::Memo,
     proto::compact_formats::CompactBlock,
     prover::TxProver,
@@ -56,7 +56,7 @@ fn extfvk_from_seed(seed: &[u8], account: u32) -> ExtendedFullViewingKey {
 
 fn address_from_extfvk(extfvk: &ExtendedFullViewingKey) -> String {
     let addr = extfvk.default_address().unwrap().1;
-    encode_payment_address(HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, &addr)
+    encode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS_TEST, &addr)
 }
 
 fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
@@ -475,25 +475,18 @@ struct SelectedNoteRow {
 fn send_to_address(
     db_data: &str,
     consensus_branch_id: u32,
-    master: &ExtendedSpendingKey,
     prover: impl TxProver,
     account: u32,
+    extsk: &ExtendedSpendingKey,
     to_str: &str,
     value: Amount,
     memo: Option<Memo>,
 ) -> Result<i64, Error> {
     // Derive the ExtendedFullViewingKey for the account we are spending from.
-    let extsk = ExtendedSpendingKey::from_path(
-        &master,
-        &[
-            ChildIndex::Hardened(32),
-            ChildIndex::Hardened(1),
-            ChildIndex::Hardened(account),
-        ],
-    );
-    let extfvk = ExtendedFullViewingKey::from(&extsk);
+    let extfvk = ExtendedFullViewingKey::from(extsk);
+    let ovk = extfvk.fvk.ovk;
 
-    let to = decode_payment_address(HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, to_str)?;
+    let to = decode_payment_address(HRP_SAPLING_PAYMENT_ADDRESS_TEST, to_str)?;
 
     let data = Connection::open(db_data)?;
 
@@ -583,18 +576,18 @@ fn send_to_address(
     )?;
 
     // Create the transaction
-    let mut builder = Builder::new(1, height);
+    let mut builder = Builder::new(height);
     for selected in notes {
         let selected = selected?;
         builder.add_sapling_spend(
-            account,
+            extsk.clone(),
             selected.diversifier,
             selected.note,
             selected.witness,
         )?;
     }
-    builder.add_sapling_output(account, to, value, memo.clone())?;
-    let (tx, tx_metadata) = builder.build(consensus_branch_id, master, prover)?;
+    builder.add_sapling_output(ovk, to, value, memo.clone())?;
+    let (tx, tx_metadata) = builder.build(consensus_branch_id, prover)?;
     // We only called add_sapling_output() once.
     let output_index = tx_metadata.output_index(0).unwrap() as i64;
 
@@ -650,7 +643,10 @@ pub mod android {
 
     use log::Level;
     use std::path::Path;
-    use zcash_client_backend::{note_encryption::Memo, prover::LocalTxProver};
+    use zcash_client_backend::{
+        constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, encoding::decode_extended_spending_key,
+        note_encryption::Memo, prover::LocalTxProver,
+    };
     use zcash_primitives::transaction::components::Amount;
     use zip32::ExtendedSpendingKey;
 
@@ -851,7 +847,8 @@ pub mod android {
         env: JNIEnv,
         _: JClass,
         db_data: JString,
-        seed: jbyteArray,
+        account: jint,
+        extsk: JString,
         to: JString,
         value: jlong,
         memo: JString,
@@ -862,7 +859,16 @@ pub mod android {
             .get_string(db_data)
             .expect("Couldn't get Java string!")
             .into();
-        let seed = env.convert_byte_array(seed).unwrap();
+        let account = if account >= 0 {
+            account as u32
+        } else {
+            error!("account argument must be positive");
+            return -1;
+        };
+        let extsk: String = env
+            .get_string(extsk)
+            .expect("Couldn't get Java string!")
+            .into();
         let to: String = env
             .get_string(to)
             .expect("Couldn't get Java string!")
@@ -880,6 +886,15 @@ pub mod android {
             .get_string(output_params)
             .expect("Couldn't get Java string!")
             .into();
+
+        let extsk =
+            match decode_extended_spending_key(HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, &extsk) {
+                Ok(extsk) => extsk,
+                Err(e) => {
+                    error!("Invalid ExtendedSpendingKey: {}", e);
+                    return -1;
+                }
+            };
 
         let prover = LocalTxProver::new(
             Path::new(&spend_params),
@@ -899,9 +914,9 @@ pub mod android {
         match send_to_address(
             &db_data,
             SAPLING_CONSENSUS_BRANCH_ID,
-            &ExtendedSpendingKey::master(&seed),
             prover,
-            0,
+            account,
+            &extsk,
             &to,
             value,
             memo,
