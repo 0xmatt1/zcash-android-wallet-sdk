@@ -7,7 +7,7 @@ class JniConverter {
     external fun initAccountsTable(
         dbData: String,
         seed: ByteArray,
-        accounts: Int): Boolean
+        accounts: Int): Array<String>
 
     external fun initBlocksTable(
         dbData: String,

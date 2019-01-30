@@ -35,24 +35,11 @@ use zcash_primitives::{
     transaction::components::Amount,
     JUBJUB,
 };
-use zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendingKey};
+use zip32::{ExtendedFullViewingKey, ExtendedSpendingKey};
 
 const SAPLING_CONSENSUS_BRANCH_ID: u32 = 0x76b8_09bb;
 
 const ANCHOR_OFFSET: u32 = 10;
-
-fn extfvk_from_seed(seed: &[u8], account: u32) -> ExtendedFullViewingKey {
-    let master = ExtendedSpendingKey::master(seed);
-    let extsk = ExtendedSpendingKey::from_path(
-        &master,
-        &[
-            ChildIndex::Hardened(32),
-            ChildIndex::Hardened(1),
-            ChildIndex::Hardened(account),
-        ],
-    );
-    ExtendedFullViewingKey::from(&extsk)
-}
 
 fn address_from_extfvk(extfvk: &ExtendedFullViewingKey) -> String {
     let addr = extfvk.default_address().unwrap().1;
@@ -644,20 +631,24 @@ pub mod android {
     use log::Level;
     use std::path::Path;
     use zcash_client_backend::{
-        constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST, encoding::decode_extended_spending_key,
-        note_encryption::Memo, prover::LocalTxProver,
+        constants::HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST,
+        encoding::{decode_extended_spending_key, encode_extended_spending_key},
+        note_encryption::Memo,
+        prover::LocalTxProver,
     };
     use zcash_primitives::transaction::components::Amount;
-    use zip32::ExtendedSpendingKey;
+    use zip32::{ChildIndex, ExtendedFullViewingKey, ExtendedSpendingKey};
 
     use self::android_logger::Filter;
     use self::jni::objects::{JClass, JString};
-    use self::jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
+    use self::jni::sys::{
+        jboolean, jbyteArray, jint, jlong, jobjectArray, jsize, jstring, JNI_FALSE, JNI_TRUE,
+    };
     use self::jni::JNIEnv;
 
     use super::{
-        extfvk_from_seed, get_address, get_balance, init_accounts_table, init_blocks_table,
-        init_data_database, scan_cached_blocks, send_to_address, SAPLING_CONSENSUS_BRANCH_ID,
+        get_address, get_balance, init_accounts_table, init_blocks_table, init_data_database,
+        scan_cached_blocks, send_to_address, SAPLING_CONSENSUS_BRANCH_ID,
     };
 
     #[no_mangle]
@@ -702,30 +693,64 @@ pub mod android {
         db_data: JString,
         seed: jbyteArray,
         accounts: jint,
-    ) -> jboolean {
+    ) -> jobjectArray {
         let db_data: String = env
             .get_string(db_data)
             .expect("Couldn't get Java string!")
             .into();
         let seed = env.convert_byte_array(seed).unwrap();
-        let accounts = if accounts >= 0 {
-            accounts as u32
+
+        let ret = if accounts >= 0 {
+            let master = ExtendedSpendingKey::master(&seed);
+            let extsks: Vec<_> = (0..accounts as u32)
+                .map(|account| {
+                    ExtendedSpendingKey::from_path(
+                        &master,
+                        &[
+                            ChildIndex::Hardened(32),
+                            ChildIndex::Hardened(1),
+                            ChildIndex::Hardened(account),
+                        ],
+                    )
+                })
+                .collect();
+            let extfvks: Vec<_> = extsks
+                .iter()
+                .map(|extsk| ExtendedFullViewingKey::from(extsk))
+                .collect();
+
+            match init_accounts_table(&db_data, &extfvks) {
+                Ok(()) => {
+                    // Return the ExtendedSpendingKeys for the created accounts
+                    extsks
+                }
+                Err(e) => {
+                    error!("Error while initializing accounts: {}", e);
+                    // Return an empty array to indicate an error
+                    vec![]
+                }
+            }
         } else {
             error!("accounts argument must be positive");
-            return JNI_FALSE;
+            // Return an empty array to indicate an error
+            vec![]
         };
 
-        let extfvks: Vec<_> = (0..accounts)
-            .map(|account| extfvk_from_seed(&seed, account))
-            .collect();
-
-        match init_accounts_table(&db_data, &extfvks) {
-            Ok(()) => JNI_TRUE,
-            Err(e) => {
-                error!("Error while initializing accounts: {}", e);
-                JNI_FALSE
-            }
+        let jempty = env.new_string("").expect("Couldn't create Java string!");
+        let jret = env
+            .new_object_array(ret.len() as jsize, "java/lang/String", *jempty)
+            .expect("Couldn't create Java array!");
+        for (i, extsk) in ret.into_iter().enumerate() {
+            let jextsk = env
+                .new_string(encode_extended_spending_key(
+                    HRP_SAPLING_EXTENDED_SPENDING_KEY_TEST,
+                    &extsk,
+                ))
+                .expect("Couldn't create Java string!");
+            env.set_object_array_element(jret, i as jsize, *jextsk)
+                .expect("Couldn't set Java array element!");
         }
+        jret
     }
 
     #[no_mangle]
