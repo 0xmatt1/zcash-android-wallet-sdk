@@ -41,14 +41,14 @@ const SAPLING_CONSENSUS_BRANCH_ID: u32 = 0x76b8_09bb;
 
 const ANCHOR_OFFSET: u32 = 10;
 
-fn extfvk_from_seed(seed: &[u8]) -> ExtendedFullViewingKey {
+fn extfvk_from_seed(seed: &[u8], account: u32) -> ExtendedFullViewingKey {
     let master = ExtendedSpendingKey::master(seed);
     let extsk = ExtendedSpendingKey::from_path(
         &master,
         &[
             ChildIndex::Hardened(32),
             ChildIndex::Hardened(1),
-            ChildIndex::Hardened(0),
+            ChildIndex::Hardened(account),
         ],
     );
     ExtendedFullViewingKey::from(&extsk)
@@ -61,6 +61,14 @@ fn address_from_extfvk(extfvk: &ExtendedFullViewingKey) -> String {
 
 fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
     let data = Connection::open(db_data)?;
+    data.execute(
+        "CREATE TABLE IF NOT EXISTS accounts (
+            account INTEGER PRIMARY KEY,
+            extfvk BLOB NOT NULL,
+            address TEXT NOT NULL
+        )",
+        NO_PARAMS,
+    )?;
     data.execute(
         "CREATE TABLE IF NOT EXISTS blocks (
             height INTEGER PRIMARY KEY,
@@ -94,6 +102,7 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
             memo BLOB,
             spent INTEGER,
             FOREIGN KEY (tx) REFERENCES transactions(id_tx),
+            FOREIGN KEY (account) REFERENCES accounts(account),
             FOREIGN KEY (spent) REFERENCES transactions(id_tx),
             CONSTRAINT tx_output UNIQUE (tx, output_index)
         )",
@@ -121,10 +130,40 @@ fn init_data_database(db_data: &str) -> rusqlite::Result<()> {
             value INTEGER NOT NULL,
             memo BLOB,
             FOREIGN KEY (tx) REFERENCES transactions(id_tx),
+            FOREIGN KEY (from_account) REFERENCES accounts(account),
             CONSTRAINT tx_output UNIQUE (tx, output_index)
         )",
         NO_PARAMS,
     )?;
+    Ok(())
+}
+
+fn init_accounts_table(db_data: &str, extfvks: &[ExtendedFullViewingKey]) -> Result<(), Error> {
+    let data = Connection::open(db_data)?;
+
+    let mut empty_check = data.prepare("SELECT * FROM accounts LIMIT 1")?;
+    if empty_check.exists(NO_PARAMS)? {
+        return Err(format_err!("accounts table is not empty"));
+    }
+
+    // Insert accounts atomically
+    data.execute("BEGIN IMMEDIATE", NO_PARAMS)?;
+    for (account, extfvk) in extfvks.iter().enumerate() {
+        let mut encoded = vec![];
+        extfvk.write(&mut encoded)?;
+        let address = address_from_extfvk(extfvk);
+        data.execute(
+            "INSERT INTO accounts (account, extfvk, address)
+            VALUES (?, ?, ?)",
+            &[
+                (account as u32).to_sql()?,
+                encoded.to_sql()?,
+                address.to_sql()?,
+            ],
+        )?;
+    }
+    data.execute("COMMIT", NO_PARAMS)?;
+
     Ok(())
 }
 
@@ -593,8 +632,8 @@ pub mod android {
     use self::jni::JNIEnv;
 
     use super::{
-        address_from_extfvk, extfvk_from_seed, get_balance, init_blocks_table, init_data_database,
-        scan_cached_blocks, send_to_address, SAPLING_CONSENSUS_BRANCH_ID,
+        address_from_extfvk, extfvk_from_seed, get_balance, init_accounts_table, init_blocks_table,
+        init_data_database, scan_cached_blocks, send_to_address, SAPLING_CONSENSUS_BRANCH_ID,
     };
 
     #[no_mangle]
@@ -627,6 +666,39 @@ pub mod android {
             Ok(()) => JNI_TRUE,
             Err(e) => {
                 error!("Error while initializing data DB: {}", e);
+                JNI_FALSE
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn Java_cash_z_wallet_sdk_jni_JniConverter_initAccountsTable(
+        env: JNIEnv,
+        _: JClass,
+        db_data: JString,
+        seed: jbyteArray,
+        accounts: jint,
+    ) -> jboolean {
+        let db_data: String = env
+            .get_string(db_data)
+            .expect("Couldn't get Java string!")
+            .into();
+        let seed = env.convert_byte_array(seed).unwrap();
+        let accounts = if accounts >= 0 {
+            accounts as u32
+        } else {
+            error!("accounts argument must be positive");
+            return JNI_FALSE;
+        };
+
+        let extfvks: Vec<_> = (0..accounts)
+            .map(|account| extfvk_from_seed(&seed, account))
+            .collect();
+
+        match init_accounts_table(&db_data, &extfvks) {
+            Ok(()) => JNI_TRUE,
+            Err(e) => {
+                error!("Error while initializing accounts: {}", e);
                 JNI_FALSE
             }
         }
@@ -670,7 +742,7 @@ pub mod android {
     ) -> jstring {
         let seed = env.convert_byte_array(seed).unwrap();
 
-        let addr = address_from_extfvk(&extfvk_from_seed(&seed));
+        let addr = address_from_extfvk(&extfvk_from_seed(&seed, 0));
 
         let output = env.new_string(addr).expect("Couldn't create Java string!");
         output.into_inner()
