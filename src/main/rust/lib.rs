@@ -796,13 +796,20 @@ pub mod android {
         env: JNIEnv,
         _: JClass,
         db_data: JString,
+        account: jint,
     ) -> jlong {
         let db_data: String = env
             .get_string(db_data)
             .expect("Couldn't get Java string!")
             .into();
+        let account = if account >= 0 {
+            account as u32
+        } else {
+            error!("account argument must be positive");
+            return -1;
+        };
 
-        match get_balance(&db_data, 0) {
+        match get_balance(&db_data, account) {
             Ok(balance) => balance.0,
             Err(e) => {
                 error!("Error while fetching balance: {}", e);
