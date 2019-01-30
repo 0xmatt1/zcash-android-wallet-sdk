@@ -315,7 +315,7 @@ fn scan_cached_blocks(db_cache: &str, db_data: &str) -> Result<(), Error> {
             witness: IncrementalWitness::read(&data[..]).unwrap(),
         }
     })?;
-    let mut witnesses: Vec<_> = witnesses.into_iter().collect::<Result<_, _>>()?;
+    let mut witnesses: Vec<_> = witnesses.collect::<Result<_, _>>()?;
 
     // Get the nullifiers for the notes we are tracking
     let nullifiers = stmt_fetch_nullifiers.query_map(NO_PARAMS, |row| {
@@ -323,7 +323,7 @@ fn scan_cached_blocks(db_cache: &str, db_data: &str) -> Result<(), Error> {
         let account: i64 = row.get(2);
         (nf, account as usize)
     })?;
-    let mut nullifiers: Vec<_> = nullifiers.into_iter().collect::<Result<_, _>>()?;
+    let mut nullifiers: Vec<_> = nullifiers.collect::<Result<_, _>>()?;
 
     for row in rows {
         let row = row?;
