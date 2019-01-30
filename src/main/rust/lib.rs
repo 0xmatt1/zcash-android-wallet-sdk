@@ -331,10 +331,13 @@ fn scan_cached_blocks(db_cache: &str, db_data: &str) -> Result<(), Error> {
         // Start an SQL transaction for this block.
         data.execute("BEGIN IMMEDIATE", NO_PARAMS)?;
 
-        // Scanned blocks MUST be height-sequential.
-        if row.height != (last_height + 1) {
+        // Scanned blocks MUST be height-ascending, but they might not be height-sequential
+        // (e.g. if blocks that don't contain Sapling data are skipped). Note that this
+        // introduces a risk that a block containing Sapling data is skipped; it is up to
+        // the caller to ensure this does not happen.
+        if row.height <= last_height {
             return Err(format_err!(
-                "Expected height of next CompactBlock to be {}, but was {}",
+                "Expected height of next CompactBlock to be at least {}, but was {}",
                 last_height + 1,
                 row.height
             ));
